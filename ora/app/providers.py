@@ -6,7 +6,8 @@
     ora providers add ID --protocol openai_compatible|anthropic_messages --endpoint URL --model NAME
                      [--images] [--context-window N] [--max-output N] [--reasoning-effort E]
                      [--request-options JSON] [--recovery-window SECONDS] [--key-env NAME]
-    ora providers remove ID             a profile added here (and its stored key)
+                     [--cluster-http] [--reasoning-field reasoning_content|reasoning]
+    ora providers remove ID            a profile added here (and its stored key)
     ora providers test PROFILE          the provider probe every launch runs (provider_marker)
 
 Keys go to the user-level ORA credential store that Pi's ``/login`` uses too,
@@ -47,7 +48,9 @@ def register(sub: Any) -> None:
     add = actions.add_parser("add", help="add an OpenAI-compatible or Anthropic endpoint of your own")
     add.add_argument("profile_id", metavar="ID")
     add.add_argument("--protocol", choices=sorted(PROTOCOLS), required=True)
-    add.add_argument("--endpoint", required=True, help="https://..., or http://127.0.0.1:PORT/... on this machine")
+    add.add_argument("--endpoint", required=True,
+                     help="https://..., http://127.0.0.1:PORT/... on this machine, "
+                          "or http://NODE:PORT/... with --cluster-http")
     add.add_argument("--model", required=True, help="the model id the endpoint serves")
     add.add_argument("--images", action="store_true", help="the model reads images")
     add.add_argument("--context-window", type=int, metavar="N",
@@ -62,6 +65,13 @@ def register(sub: Any) -> None:
                      help="how long each attempt may wait for its first token, and how long failures before "
                           "any content are retried before the call ends, 30..1800 s (default 180); "
                           "raise it for a slow self-hosted model")
+    add.add_argument("--cluster-http", action="store_true",
+                     help="admit plain HTTP to another host (cluster_http_v1), such as a vLLM server on "
+                          "another node of your cluster; the key travels unencrypted, so only on a network "
+                          "you trust")
+    add.add_argument("--reasoning-field", choices=("reasoning_content", "reasoning"),
+                     help="the message field the server streams reasoning in (openai_compatible); "
+                          "current vLLM uses reasoning (default reasoning_content)")
     add.add_argument("--key-env", help="the key's variable (default ORA_<ID>_API_KEY)")
     add.add_argument("--no-key", action="store_true", help="add the profile without entering a key")
     add.add_argument("--stdin", action="store_true", help="read the key from standard input")
@@ -153,7 +163,8 @@ def add_endpoint(profile_id: str, *, protocol: str, endpoint: str, model: str, i
                  context_window: int | None = None, max_output: int | None = None,
                  reasoning_effort: str = "provider_default", key_env: str | None = None,
                  request_options: Mapping[str, Any] | str | None = None,
-                 recovery_window: float | None = None) -> dict[str, Any]:
+                 recovery_window: float | None = None, cluster_http: bool = False,
+                 reasoning_field: str | None = None) -> dict[str, Any]:
     """Store a user profile for an endpoint; ``request_options`` may be the option's JSON text."""
     from ora.agent.providers import user_store
 
@@ -164,7 +175,8 @@ def add_endpoint(profile_id: str, *, protocol: str, endpoint: str, model: str, i
         context_window_tokens=user_store.DEFAULT_CONTEXT_WINDOW if context_window is None else context_window,
         max_output_tokens=user_store.DEFAULT_MAX_OUTPUT if max_output is None else max_output,
         reasoning_effort=reasoning_effort, api_key_env=key_env,
-        request_options=request_options, recovery_window_s=recovery_window)
+        request_options=request_options, recovery_window_s=recovery_window, cluster_http=cluster_http,
+        reasoning_field=reasoning_field)
     user_store.save_profile(profile_id, profile)
     return profile
 
@@ -182,12 +194,18 @@ def describe_added(profile_id: str, profile: Mapping[str, Any], *, context_defau
         window += " (the default; pass --context-window with the model's own)"
     options = profile.get("request_options")
     recovery = profile.get("recovery_window_s")
-    return [
+    lines = [
         f"Added the profile {profile_id} ({user_store.profiles_path()}); its key is {profile['api_key_env']}.",
         f"  {window}, max output {profile['max_output_tokens']} tokens",
         f"  request_options {_compact(options)}" if options else "  request_options none",
         f"  recovery window {recovery:g} s" if recovery is not None else "  recovery window 180 s (the default)",
     ]
+    if profile.get("reasoning_field") is not None:
+        lines.append(f"  reasoning field {profile['reasoning_field']}")
+    if profile.get("endpoint_transport") == "cluster_http_v1":
+        lines.append(f"  transport cluster_http_v1: plain HTTP to {profile['endpoint']}; "
+                     "the key and every request cross the network unencrypted")
+    return lines
 
 
 def add_interactively(choose: Callable[[str, list[dict[str, str]]], str | None],
@@ -276,7 +294,8 @@ def command_providers(args: argparse.Namespace, load_builtin: Callable[[], Mappi
                                    images=args.images, context_window=args.context_window,
                                    max_output=args.max_output, reasoning_effort=args.reasoning_effort,
                                    key_env=args.key_env, request_options=args.request_options,
-                                   recovery_window=args.recovery_window)
+                                   recovery_window=args.recovery_window, cluster_http=args.cluster_http,
+                                   reasoning_field=args.reasoning_field)
             for line in describe_added(args.profile_id, profile, context_defaulted=args.context_window is None):
                 print(line)
             if args.no_key:

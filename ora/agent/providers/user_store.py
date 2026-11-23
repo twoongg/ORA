@@ -27,7 +27,7 @@ from urllib.parse import urlsplit
 
 import yaml
 
-from .openai_wire_options import validate_request_options
+from .openai_wire_options import REASONING_FIELDS, validate_request_options
 from .profiles import (
     BUILTIN_PROVIDER_CATALOG, CATALOG_SCHEMA, PROBE_SCHEMA, PROVIDER_PROTOCOLS, NativeProviderProfileError,
     load_builtin_provider_profiles, load_provider_profiles, select_provider_profile,
@@ -225,17 +225,26 @@ def select_profile(profile_id: str | None, environ: Mapping[str, str] | None = N
     return select_provider_profile(BUILTIN_PROVIDER_CATALOG, profile_id=profile_id)
 
 
-def endpoint_transport(endpoint: str) -> str:
-    """``https_v1``, or ``loopback_http_v1`` for plain HTTP on this machine; any other URL is refused."""
+def endpoint_transport(endpoint: str, *, cluster_http: bool = False) -> str:
+    """``https_v1``, or ``loopback_http_v1`` for plain HTTP on this machine.
+
+    Plain HTTP to another host is ``cluster_http_v1`` only with ``cluster_http``
+    (``ora providers add --cluster-http``): a vLLM server on another node of the
+    operator's own cluster, where the key travels unencrypted. Any other URL is
+    refused.
+    """
 
     parsed = urlsplit(endpoint)
     if parsed.scheme == "https" and parsed.netloc:
         return "https_v1"
     if parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "localhost", "::1"}:
         return "loopback_http_v1"
+    if cluster_http and parsed.scheme == "http" and parsed.hostname:
+        return "cluster_http_v1"
     raise UserStoreError(
         f"{endpoint!r}: an endpoint is HTTPS, or HTTP on this machine (127.0.0.1); "
-        "reach a cluster server over plain HTTP through a local port forward (ssh -L)")
+        "reach a cluster server over plain HTTP through a local port forward (ssh -L), "
+        "or add it with --cluster-http on a network you trust")
 
 
 def parse_request_options(text: str) -> dict[str, Any]:
@@ -261,13 +270,18 @@ def new_profile(profile_id: str, *, protocol: str, endpoint: str, model: str, su
                 context_window_tokens: int = DEFAULT_CONTEXT_WINDOW, max_output_tokens: int = DEFAULT_MAX_OUTPUT,
                 reasoning_effort: str = "provider_default", api_key_env: str | None = None,
                 request_options: Mapping[str, Any] | None = None,
-                recovery_window_s: float | None = None) -> dict[str, Any]:
+                recovery_window_s: float | None = None, cluster_http: bool = False,
+                reasoning_field: str | None = None) -> dict[str, Any]:
     """A complete user profile for a custom OpenAI-compatible or Anthropic endpoint.
 
     ``request_options`` (OpenAI-compatible only) are the closed request fields
     every call adds, such as a thinking model's sampling and
     ``chat_template_kwargs``; ``recovery_window_s`` is how long each attempt
     may wait for its first token (30..1800 s; the 180 s default when absent).
+    ``cluster_http`` admits plain HTTP to another host (``cluster_http_v1``,
+    see ``endpoint_transport``). ``reasoning_field`` (OpenAI-compatible only)
+    names the message field the server streams reasoning in and takes it back
+    in: ``reasoning_content`` when absent, ``reasoning`` for current vLLM.
     """
 
     if not _PROFILE_ID.fullmatch(profile_id or ""):
@@ -284,6 +298,11 @@ def new_profile(profile_id: str, *, protocol: str, endpoint: str, model: str, su
             options = validate_request_options(request_options)
         except ValueError as exc:
             raise UserStoreError(f"invalid request_options: {exc}") from exc
+    if reasoning_field is not None:
+        if protocol != "openai_compatible":
+            raise UserStoreError("reasoning_field applies to an openai_compatible endpoint only")
+        if reasoning_field not in REASONING_FIELDS:
+            raise UserStoreError("reasoning_field is reasoning_content or reasoning")
     window = None
     if recovery_window_s is not None:
         if (isinstance(recovery_window_s, bool) or not isinstance(recovery_window_s, (int, float))
@@ -296,6 +315,8 @@ def new_profile(profile_id: str, *, protocol: str, endpoint: str, model: str, su
         optional["request_options"] = options
     if window is not None:
         optional["recovery_window_s"] = window
+    if reasoning_field is not None:
+        optional["reasoning_field"] = reasoning_field
     return {
         "protocol": protocol, "endpoint": endpoint.rstrip("/"), "model": model.strip(),
         "model_env": f"{prefix}_MODEL", "base_url_env": f"{prefix}_BASE_URL",
@@ -305,7 +326,7 @@ def new_profile(profile_id: str, *, protocol: str, endpoint: str, model: str, su
         "stream": True, "supports_images": bool(supports_images),
         "qualification_schema": PROBE_SCHEMA, "qualification_version": 1,
         "auth_scheme": "bearer" if protocol == "openai_compatible" else "x_api_key",
-        "endpoint_transport": endpoint_transport(endpoint),
+        "endpoint_transport": endpoint_transport(endpoint, cluster_http=cluster_http),
         "admission": "vision_qualified" if supports_images else "text_tool_qualified",
         "usage_scope": "general_api",
         **optional,
