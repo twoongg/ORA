@@ -1246,8 +1246,9 @@ options:
 usage: ora providers add [-h] --protocol {anthropic_messages,openai_compatible} --endpoint ENDPOINT
                          --model MODEL [--images] [--context-window N] [--max-output N]
                          [--reasoning-effort REASONING_EFFORT] [--request-options JSON]
-                         [--recovery-window SECONDS] [--key-env KEY_ENV] [--no-key] [--stdin]
-                         [--no-test]
+                         [--recovery-window SECONDS] [--cluster-http]
+                         [--reasoning-field {reasoning_content,reasoning}] [--key-env KEY_ENV]
+                         [--no-key] [--stdin] [--no-test]
                          ID
 
 positional arguments:
@@ -1256,7 +1257,8 @@ positional arguments:
 options:
   -h, --help            show this help message and exit
   --protocol {anthropic_messages,openai_compatible}
-  --endpoint ENDPOINT   https://..., or http://127.0.0.1:PORT/... on this machine
+  --endpoint ENDPOINT   https://..., http://127.0.0.1:PORT/... on this machine, or
+                        http://NODE:PORT/... with --cluster-http
   --model MODEL         the model id the endpoint serves
   --images              the model reads images
   --context-window N    the model's context window in tokens (default 131072)
@@ -1270,6 +1272,12 @@ options:
                         how long each attempt may wait for its first token, and how long failures
                         before any content are retried before the call ends, 30..1800 s (default
                         180); raise it for a slow self-hosted model
+  --cluster-http        admit plain HTTP to another host (cluster_http_v1), such as a vLLM server on
+                        another node of your cluster; the key travels unencrypted, so only on a
+                        network you trust
+  --reasoning-field {reasoning_content,reasoning}
+                        the message field the server streams reasoning in (openai_compatible);
+                        current vLLM uses reasoning (default reasoning_content)
   --key-env KEY_ENV     the key's variable (default ORA_<ID>_API_KEY)
   --no-key              add the profile without entering a key
   --stdin               read the key from standard input

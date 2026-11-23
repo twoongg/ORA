@@ -118,7 +118,9 @@ def resolve_native_provider_endpoint(policy: dict[str, Any]) -> None:
     if not isinstance(endpoint, str) or not endpoint:
         raise RunSpecError("native_api policy.endpoint must be an explicit URL")
     endpoint_transport = policy.setdefault("endpoint_transport", "https_v1")
-    if endpoint_transport not in {"https_v1", "loopback_http_v1"}:
+    # cluster_http_v1: plain HTTP to a server of the operator's own network (a
+    # vLLM node), admitted only when named; it binds no gateway and no affinity.
+    if endpoint_transport not in {"https_v1", "loopback_http_v1", "cluster_http_v1"}:
         raise RunSpecError("unsupported native_api policy.endpoint_transport")
     if "gateway_client_binding" in policy and not isinstance(policy["gateway_client_binding"], bool):
         raise RunSpecError("policy.gateway_client_binding must be boolean")
@@ -139,7 +141,7 @@ def resolve_native_provider_endpoint(policy: dict[str, Any]) -> None:
                 "query or fragment"
             )
         raise RunSpecError(
-            "native_api loopback endpoint must not contain credentials, query or fragment"
+            "native_api HTTP endpoint must not contain credentials, query or fragment"
         )
     if endpoint_transport == "https_v1" and parsed_endpoint.scheme != "https":
         raise RunSpecError(
@@ -151,6 +153,10 @@ def resolve_native_provider_endpoint(policy: dict[str, Any]) -> None:
     ):
         raise RunSpecError(
             "native_api loopback_http_v1 endpoint must be HTTP loopback"
+        )
+    if endpoint_transport == "cluster_http_v1" and parsed_endpoint.scheme != "http":
+        raise RunSpecError(
+            "native_api cluster_http_v1 endpoint must use HTTP"
         )
     policy["endpoint"] = endpoint.rstrip("/")
     session_affinity = policy.get("provider_session_affinity")

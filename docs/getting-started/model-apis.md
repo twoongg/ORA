@@ -134,9 +134,22 @@ provider list's *+ add an endpoint* or the command line:
 
 It asks for the key (stored as `ORA_<ID>_API_KEY`, or `--key-env NAME`) and
 runs the probe. Use the model ID exposed by the service. Plain HTTP is allowed
-only on loopback; remote services need HTTPS, so reach a cluster server through
-a local port forward (`ssh -L 30000:node:30000 ...`). Set `SSL_CERT_FILE` to
-the trust bundle for a private certificate authority.
+on loopback; a remote service needs HTTPS, a local port forward
+(`ssh -L 30000:node:30000 ...`) or `--cluster-http`. Set `SSL_CERT_FILE` to
+the trust bundle for a private certificate authority. A vLLM server started
+without `--api-key` accepts any key: store any non-empty value, such as `EMPTY`.
+
+`--cluster-http` admits plain HTTP to another host, such as a vLLM server on
+another node of your own cluster (`http://NODE:8000/v1`). The profile records
+`endpoint_transport: cluster_http_v1`; the key and every request then cross the
+network unencrypted, so use it only on a network you trust. Such a profile
+sends no session affinity and binds no gateway. The probe goes through
+`HTTP_PROXY` when the machine sets one, so add the server's host to `NO_PROXY`.
+
+vLLM streams a thinking model's reasoning in the `reasoning` field. Pass
+`--reasoning-field reasoning` (OpenAI-compatible only) so the agent records
+that reasoning and returns it on later turns; without it the profile reads
+`reasoning_content`, the field DeepSeek's own API uses.
 
 Give the profile what the model card asks for. `--context-window N` is the
 context window the server serves, in tokens (vLLM's `--max-model-len`, at most
@@ -164,6 +177,14 @@ recovery](../reference/configuration-and-evidence.md#provider-recovery)):
     --endpoint http://127.0.0.1:30001/v1 --model muse-spark-open --images \
     --context-window 262144 --max-output 16384 \
     --request-options '{"temperature":1.0,"top_p":1.0,"chat_template_kwargs":{"reasoning_effort":"high"}}'
+
+# vLLM on another node of your cluster, served with --enable-auto-tool-choice and its
+# --tool-call-parser; the key (vLLM's --api-key) is read from standard input
+./scripts/ora providers add node-vllm --protocol openai_compatible \
+    --endpoint http://NODE:8000/v1 --model deepseek-v4.1-flash --images \
+    --cluster-http --reasoning-field reasoning --context-window 131072 \
+    --recovery-window 900 --stdin < vllm-key.txt
+./scripts/ora run --env robodojo --task general_pickup --provider-profile node-vllm --confirm-launch
 ```
 
 `add` prints the context window, output budget, request options and recovery

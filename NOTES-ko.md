@@ -118,6 +118,32 @@ GPU가 없으면(이 Mac처럼) 가짜 로봇(Synthetic)으로 같은 흐름만 
 - **주의 2, 사람이 끼어든 실행**: 사람이 메시지를 보낸 실행은 "human-assisted"로 표시되고 자율 성공률에서 빠져요.
 - **주의 3, 스텝 제한**: RoboDojo 39.9%는 스텝 제한 없이 센 숫자예요. 제한 안에서는 10.6%예요. 우리 점수와 비교할 때 기준을 맞춰야 해요.
 
+## 회사 vLLM으로 돌리기 (`vllm-endpoint` 브랜치)
+
+원래 ORA는 `https` 주소이거나 같은 기계(`http://127.0.0.1`)의 서버만 받아요.
+이 브랜치에서 두 가지를 더했어요.
+
+- `--cluster-http`: 다른 노드의 vLLM(`http://노드이름:8000/v1`)을 받아요. 이 옵션을 붙일 때만 허용돼요. 키가 암호화 없이 오가니 회사 내부망에서만 쓰세요.
+- `--reasoning-field reasoning`: vLLM은 생각 내용을 `reasoning` 칸으로 보내요. 이걸 붙여야 생각 내용이 기록되고 다음 턴에 다시 전달돼요.
+
+```bash
+# 1) 한 번만: 프로필 등록 (키는 vLLM의 --api-key 값. 키 없이 띄웠으면 아무 값, 예: EMPTY)
+./scripts/ora providers add node-vllm --protocol openai_compatible \
+    --endpoint http://노드이름:8000/v1 --model deepseek-v4.1-flash --images \
+    --cluster-http --reasoning-field reasoning \
+    --context-window 131072 --recovery-window 900 --stdin < vllm-key.txt
+
+# 2) 실행
+./scripts/ora run --env robodojo --task general_pickup --provider-profile node-vllm --confirm-launch
+```
+
+- vLLM이 같은 노드에 있으면 `--endpoint http://127.0.0.1:8000/v1`로 쓰고 `--cluster-http`는 빼도 돼요.
+- `--model`은 vLLM의 `--served-model-name`(`/v1/models`에 나오는 이름)과 같아야 해요.
+- `--context-window`는 vLLM의 `--max-model-len`과 맞추세요.
+- vLLM은 `--enable-auto-tool-choice --tool-call-parser ...`로 띄워야 도구 호출이 돼요.
+- 서버에 `HTTP_PROXY`가 설정돼 있으면 `NO_PROXY`에 vLLM 노드 이름을 넣으세요. 등록할 때 연결 확인이 프록시로 새는 걸 막아요.
+- 등록하면 바로 연결을 확인해요(응답, 이미지, 도구 호출 왕복). 나중에 다시 확인하려면 `./scripts/ora providers test node-vllm`.
+
 ## 더 읽을 곳
 
 - 작동 원리: `docs/how-ora-works.md`, `docs/architecture.md`

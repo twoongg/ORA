@@ -30,7 +30,13 @@ PROFILE_ADMISSIONS = {"registered_only", "text_tool_qualified", "vision_qualifie
 PROFILE_USAGE_SCOPES = {
     "agent_plan_api", "general_api", "supported_coding_tools_only",
 }
-ENDPOINT_TRANSPORTS = {"https_v1", "loopback_http_v1"}
+#: ``cluster_http_v1`` is plain HTTP to a server on the operator's own network
+#: (a vLLM node of their cluster). Only a profile or RunSpec that names it admits
+#: it, since the key and every request then cross that network unencrypted; it
+#: carries no session affinity and binds no gateway.
+ENDPOINT_TRANSPORTS = {"https_v1", "loopback_http_v1", "cluster_http_v1"}
+#: The transports that may send the X-Session-ID affinity header.
+AFFINITY_TRANSPORTS = {"https_v1", "loopback_http_v1"}
 SESSION_AFFINITY_MODES = {"x_session_id_run_v1"}
 #: How an OpenAI-compatible profile names the output-token budget on the wire.
 OUTPUT_TOKEN_PARAMETERS = {"max_tokens", "max_completion_tokens"}
@@ -157,6 +163,7 @@ def load_provider_profiles(path: Path) -> dict[str, dict[str, Any]]:
                     and endpoint.scheme == "http"
                     and endpoint.hostname in {"127.0.0.1", "localhost", "::1"}
                 )
+                or (endpoint_transport == "cluster_http_v1" and endpoint.scheme == "http")
             )
         )
         if not endpoint_valid:
@@ -216,7 +223,7 @@ def load_provider_profiles(path: Path) -> dict[str, dict[str, Any]]:
             raise NativeProviderProfileError(
                 f"provider profile {raw_profile_id} has invalid session_affinity"
             )
-        if session_affinity is not None and endpoint_transport not in ENDPOINT_TRANSPORTS:
+        if session_affinity is not None and endpoint_transport not in AFFINITY_TRANSPORTS:
             raise NativeProviderProfileError(
                 f"provider profile {raw_profile_id} limits session affinity to loopback or HTTPS endpoints"
             )

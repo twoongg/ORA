@@ -647,6 +647,65 @@ def test_openai_loopback_profile_may_declare_affinity_and_output_parameter(tmp_p
         load_provider_profiles(catalog(protocol="anthropic_messages"))
 
 
+def test_a_cluster_http_profile_is_plain_http_without_affinity_or_a_gateway(tmp_path: Path) -> None:
+    from ora.agent.providers.profiles import NativeProviderProfileError, load_provider_profiles
+
+    def catalog(**fields: Any) -> Path:
+        profile = {
+            "protocol": "openai_compatible", "endpoint": "http://gpu-node-7:8000/v1",
+            "endpoint_transport": "cluster_http_v1", "model": "deepseek-v4.1-flash",
+            "model_env": "ORA_NODE_MODEL", "base_url_env": "ORA_NODE_BASE_URL",
+            "api_key_env": "ORA_NODE_API_KEY", "proxy_env": [], "reasoning_effort": "provider_default",
+            "context_window_tokens": 131072, "max_output_tokens": 8192, "stream": True,
+            "supports_images": True, "reasoning_field": "reasoning",
+            "qualification_schema": "ora.native-provider-probe.v1",
+            "qualification_version": 1, **fields,
+        }
+        path = tmp_path / "catalog.yaml"
+        path.write_text(json.dumps({"schema": "ora.native-provider-catalog.v1",
+                                    "profiles": {"node": profile}}))
+        return path
+
+    loaded = load_provider_profiles(catalog())["node"]
+    assert loaded["endpoint_transport"] == "cluster_http_v1" and loaded["reasoning_field"] == "reasoning"
+    assert load_provider_profiles(catalog(endpoint="http://10.0.0.5:8000/v1"))["node"]["endpoint"] == (
+        "http://10.0.0.5:8000/v1")
+    with pytest.raises(NativeProviderProfileError, match="unsafe endpoint"):
+        load_provider_profiles(catalog(endpoint="https://gpu-node-7:8000/v1"))
+    with pytest.raises(NativeProviderProfileError, match="unsafe endpoint"):
+        load_provider_profiles(catalog(endpoint="http://user:secret@gpu-node-7:8000/v1"))
+    with pytest.raises(NativeProviderProfileError, match="limits session affinity"):
+        load_provider_profiles(catalog(session_affinity="x_session_id_run_v1"))
+    with pytest.raises(NativeProviderProfileError, match="gateway binding requires loopback_http_v1"):
+        load_provider_profiles(catalog(gateway_client_binding=True))
+
+
+def test_openai_runspec_admits_plain_http_to_a_cluster_host_only_as_cluster_http_v1(tmp_path: Path) -> None:
+    from ora.orchestrator.spec.run_spec import RunSpecError, resolve_run_spec
+
+    spec = native_run_spec(tmp_path)
+    remote_http = copy.deepcopy(spec)
+    remote_http["policy"]["endpoint"] = "http://gpu-node-7:8000/v1/"
+    with pytest.raises(RunSpecError, match="must use HTTPS"):
+        resolve_run_spec(remote_http, root=tmp_path)
+    cluster = copy.deepcopy(remote_http)
+    cluster["policy"]["endpoint_transport"] = "cluster_http_v1"
+    resolved = resolve_run_spec(cluster, root=tmp_path)
+    assert resolved["policy"]["endpoint"] == "http://gpu-node-7:8000/v1"
+    assert resolved["policy"]["endpoint_transport"] == "cluster_http_v1"
+    assert resolved["plan_sha256"] != resolve_run_spec(spec, root=tmp_path)["plan_sha256"]
+    for field, value, reason in (
+        ("endpoint", "https://gpu-node-7:8000/v1", "cluster_http_v1 endpoint must use HTTP"),
+        ("endpoint", "http://gpu-node-7:8000/v1?token=x", "must not contain credentials, query or fragment"),
+        ("provider_session_affinity", "x_session_id_run_v1", "session affinity is admitted only"),
+        ("gateway_client_binding", True, "requires loopback_http_v1"),
+    ):
+        changed = copy.deepcopy(cluster)
+        changed["policy"][field] = value
+        with pytest.raises(RunSpecError, match=reason):
+            resolve_run_spec(changed, root=tmp_path)
+
+
 def _stream_client(events):
     class Response:
         status_code = 200

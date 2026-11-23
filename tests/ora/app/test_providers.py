@@ -112,7 +112,60 @@ def test_ora_providers_adds_tests_lists_and_removes_a_custom_endpoint(config, tm
     assert "local port forward" in capsys.readouterr().err
 
 
-NEMOTRON_OPTIONS = {"temperature": 0.6, "top_p": 0.95, "chat_template_kwargs": {"enable_thinking": True}}
+def test_the_endpoint_transport_follows_the_url_and_the_cluster_opt_in(config):
+    """Plain HTTP off this machine is cluster_http_v1, and only when asked for; HTTPS and loopback keep theirs."""
+    assert user_store.endpoint_transport("https://models.example.org/v1") == "https_v1"
+    assert user_store.endpoint_transport("https://models.example.org/v1", cluster_http=True) == "https_v1"
+    assert user_store.endpoint_transport("http://127.0.0.1:8000/v1", cluster_http=True) == "loopback_http_v1"
+    assert user_store.endpoint_transport("http://10.0.0.5:8000/v1", cluster_http=True) == "cluster_http_v1"
+    assert user_store.endpoint_transport("http://gpu-node-7:8000/v1", cluster_http=True) == "cluster_http_v1"
+    with pytest.raises(user_store.UserStoreError, match="--cluster-http"):
+        user_store.endpoint_transport("http://10.0.0.5:8000/v1")
+    with pytest.raises(user_store.UserStoreError):
+        user_store.endpoint_transport("ftp://10.0.0.5/v1", cluster_http=True)
+
+    base = {"endpoint": "http://10.0.0.5:8000/v1", "model": "m", "supports_images": True, "cluster_http": True}
+    plain = user_store.new_profile("mine", protocol="openai_compatible", **base)
+    assert plain["endpoint_transport"] == "cluster_http_v1" and "reasoning_field" not in plain
+    assert user_store.new_profile("mine", protocol="openai_compatible", reasoning_field="reasoning",
+                                  **base)["reasoning_field"] == "reasoning"
+    with pytest.raises(user_store.UserStoreError, match="reasoning_content or reasoning"):
+        user_store.new_profile("mine", protocol="openai_compatible", reasoning_field="thinking", **base)
+    with pytest.raises(user_store.UserStoreError, match="openai_compatible endpoint only"):
+        user_store.new_profile("mine", protocol="anthropic_messages", reasoning_field="reasoning", **base)
+
+
+def test_a_vllm_on_another_cluster_node_is_added_with_cluster_http_and_reaches_every_plan(config, capsys):
+    """``--cluster-http`` admits ``http://NODE:PORT/v1``; ``--reasoning-field`` names where vLLM streams reasoning.
+
+    Without the flag the endpoint is refused and nothing is stored. With it the
+    profile records ``cluster_http_v1``, and a plan built from the profile
+    carries the endpoint, the transport and the reasoning field.
+    """
+    from ora.app import interactive
+    from ora.orchestrator.spec.run_spec import resolve_run_spec
+
+    endpoint = "http://gpu-node-7:8000/v1"
+    add = ["providers", "add", "node-vllm", "--protocol", "openai_compatible", "--endpoint", endpoint,
+           "--model", "deepseek-v4.1-flash", "--images", "--no-key"]
+    assert app_main.main(add) == 2
+    assert "--cluster-http" in capsys.readouterr().err
+    assert "node-vllm" not in user_store.user_profiles()
+
+    assert app_main.main([*add, "--cluster-http", "--reasoning-field", "reasoning"]) == 0
+    output = capsys.readouterr().out
+    assert "cluster_http_v1" in output and "reasoning field reasoning" in output
+    profile = user_store.user_profiles()["node-vllm"]
+    assert profile["endpoint"] == endpoint and profile["endpoint_transport"] == "cluster_http_v1"
+    assert profile["reasoning_field"] == "reasoning"
+
+    plan = resolve_run_spec(interactive.interactive_spec(provider="node-vllm", task="Move once.", actions=1))
+    assert plan["policy"]["provider_profile"] == "node-vllm" and plan["policy"]["endpoint"] == endpoint
+    assert plan["policy"]["endpoint_transport"] == "cluster_http_v1"
+    assert plan["policy"]["reasoning_field"] == "reasoning"
+
+
+NEMOTRON_OPTIONS ={"temperature": 0.6, "top_p": 0.95, "chat_template_kwargs": {"enable_thinking": True}}
 MUSE_OPTIONS = {"temperature": 1.0, "top_p": 1.0, "chat_template_kwargs": {"reasoning_effort": "high"}}
 
 
