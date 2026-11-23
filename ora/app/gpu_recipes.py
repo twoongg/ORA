@@ -213,8 +213,15 @@ def git_lfs(context: Context) -> Step:
 
 
 def _bwrap_found(prefix: Path) -> bool:
-    from ora.agent.code_mode.sandbox import SandboxError, bwrap_path
+    """True when bubblewrap is found, or not needed: a host that runs code mode under PRoot
+    (``ORA_CODE_MODE_SANDBOX=proot``) installs none."""
+    from ora.agent.code_mode.sandbox import SandboxError, bwrap_path, sandbox_kind
 
+    try:
+        if sandbox_kind() == "proot":
+            return True
+    except SandboxError:
+        pass
     if os.access(prefix / BWRAP_IN_PREFIX, os.X_OK):
         return True
     try:
@@ -610,8 +617,20 @@ def sandbox_warning(components: Sequence[str], prefix: Path | None = None) -> st
     checks). None when it is not needed or is found."""
     if "code-mode" not in components:
         return None
-    from ora.agent.code_mode.sandbox import BWRAP_REMEDY, SandboxError, bwrap_path
+    from ora.agent.code_mode.sandbox import (BWRAP_REMEDY, PROOT_REMEDY, SandboxError, bwrap_path, proot_path,
+                                             sandbox_kind)
 
+    try:
+        proot = sandbox_kind() == "proot"
+    except SandboxError as exc:
+        return str(exc)
+    if proot:
+        try:
+            proot_path()
+        except SandboxError:
+            return ("code mode runs model-written programs under PRoot here (ORA_CODE_MODE_SANDBOX=proot): "
+                    f"{PROOT_REMEDY}; {ora_command()} doctor --env robodojo checks it and the ptrace it needs")
+        return None
     if prefix is not None and os.access(prefix / BWRAP_IN_PREFIX, os.X_OK):
         return None
     try:

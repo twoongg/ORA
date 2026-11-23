@@ -144,6 +144,38 @@ GPU가 없으면(이 Mac처럼) 가짜 로봇(Synthetic)으로 같은 흐름만 
 - 서버에 `HTTP_PROXY`가 설정돼 있으면 `NO_PROXY`에 vLLM 노드 이름을 넣으세요. 등록할 때 연결 확인이 프록시로 새는 걸 막아요.
 - 등록하면 바로 연결을 확인해요(응답, 이미지, 도구 호출 왕복). 나중에 다시 확인하려면 `./scripts/ora providers test node-vllm`.
 
+## bwrap 없는 클러스터에서 코드 모드 돌리기 (`no-bwrap` 브랜치)
+
+v0.1의 RoboDojo 성적(39.9%)은 코드 모드에서 나왔고, 코드 모드는 원래 bwrap(리눅스 격리 도구)이 꼭 있어야 해요.
+쿠버네티스 같은 곳에서는 bwrap이 격리 공간(namespace)을 못 만들어서 실행 전에 막혀요.
+이 브랜치는 bwrap 대신 **PRoot**로 같은 환경을 만들어요.
+
+- 모델의 프로그램이 보는 것은 bwrap 때와 같아요: `/work`, `/ora/lib`, `/ora/observation`, `/ora/src`, 같은 환경 변수, 같은 자원 제한.
+- 빈 루트 폴더 위에 필요한 경로만 연결해서, 홈 폴더(키 파일 등)나 ORA 실행 기록은 안 보여요.
+- bwrap과 다른 점: 네트워크는 막지 못하고, 호스트의 `/proc`이 보이고, root로 돌면 시스템 폴더에 쓸 수 있어요. 모델이 일부러 찾아다니지 않는 한 결과에 영향은 없을 거라 봐요.
+- 프로세스를 추적(ptrace)하는 방식이라 프로그램 시작(파이썬 import)이 조금 느려질 수 있어요.
+
+```bash
+# 1) PRoot 받기 (sudo 없이). 5.2 이상이어야 해요
+mkdir -p ~/.local/bin && curl -L -o ~/.local/bin/proot https://proot.gitlab.io/proot/bin/proot
+chmod +x ~/.local/bin/proot && ~/.local/bin/proot --version
+ldd ~/.local/bin/proot   # "not a dynamic executable"이면 정적 빌드라 그대로 쓰면 돼요
+
+# 2) 코드 모드를 PRoot로
+export ORA_CODE_MODE_SANDBOX=proot
+./scripts/ora doctor --env robodojo      # code_mode_proot, code_mode_ptrace, code_mode_interpreter가 통과해야 해요
+
+# 3) 클러스터에서 진짜로 되는지 확인 (bwrap 테스트 묶음이 PRoot로 돌아요)
+uv run --locked python -m pytest -q tests/ora/agent/code_mode/test_sandbox.py tests/ora/agent/code_mode/test_sandbox_proot.py
+
+# 4) 실행 (vLLM 프로필은 위 "회사 vLLM으로 돌리기" 참고)
+./scripts/ora run --env robodojo --task general_pickup --provider-profile node-vllm --confirm-launch
+```
+
+- `doctor`에서 `code_mode_ptrace`가 실패하면 컨테이너 보안 설정이 ptrace를 막는 거예요. `export PROOT_NO_SECCOMP=1`을 해 보세요.
+- `ORA_CODE_MODE_SANDBOX`를 안 주면 예전처럼 bwrap을 써요.
+- 실행 직전 검사 기록(`preflight.json`)에 `sandbox: proot`가 남아서, 어느 방식으로 돌린 실행인지 나중에 구분돼요.
+
 ## 더 읽을 곳
 
 - 작동 원리: `docs/how-ora-works.md`, `docs/architecture.md`

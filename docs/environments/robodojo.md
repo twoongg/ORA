@@ -104,7 +104,7 @@ The stage clones `KhronosGroup/Vulkan-Profiles` at the pinned revision, applies 
 
 ### Code-mode sandbox
 
-RoboDojo's default policy is code mode (`robodojo_toolkit_v7`, since 2026-11-05; see [code mode by default](../reference/context-schemes.md#code-mode-by-default)): the model's programs run in a bubblewrap sandbox. The host needs bubblewrap (`bwrap` on `PATH`, at `~/.local/bin/bwrap` or named by `ORA_CODE_MODE_BWRAP`; `ora setup --env robodojo` unpacks one under its prefix and names it there when the machine has none) and unprivileged user namespaces, which ORA cannot install (`bwrap --unshare-all --ro-bind / / true` must succeed; see the [one-GPU guide](../getting-started/single-gpu.md#2-user-space-tools) for what to install or allow), and the sandbox interpreter, built from its lock:
+RoboDojo's default policy is code mode (`robodojo_toolkit_v7`, since 2026-11-05; see [code mode by default](../reference/context-schemes.md#code-mode-by-default)): the model's programs run in a bubblewrap sandbox. The host needs bubblewrap (`bwrap` on `PATH`, at `~/.local/bin/bwrap` or named by `ORA_CODE_MODE_BWRAP`; `ora setup --env robodojo` unpacks one under its prefix and names it there when the machine has none) and unprivileged user namespaces, which ORA cannot install (`bwrap --unshare-all --ro-bind / / true` must succeed; see the [one-GPU guide](../getting-started/single-gpu.md#2-user-space-tools) for what to install or allow), or, where the container refuses namespaces, PRoot in its place (`ORA_CODE_MODE_SANDBOX=proot`; see [public interfaces](../reference/public-interfaces.md)), and the sandbox interpreter, built from its lock:
 
 ```bash
 uv venv --python 3.11 "$PREFIX/envs/code-mode"

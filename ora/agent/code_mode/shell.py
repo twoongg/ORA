@@ -1,7 +1,8 @@
 """``bash`` in the code-mode sandbox (plan ``policy.code_mode``): one command, served.
 
 The command runs as ``/bin/bash -c`` in the bubblewrap sandbox
-(``sandbox.py``), in the workspace ``/work``, with the code-mode
+(``sandbox.py``; or its PRoot translation where the host names ``ORA_CODE_MODE_SANDBOX=proot``, staged per command
+and removed after it), in the workspace ``/work``, with the code-mode
 interpreter first on ``PATH`` and the ``robot`` library (``robot.py``) on
 ``PYTHONPATH`` (with ``library: extended``, ``ora_lib`` too, and the current
 observation at ``/ora/observation``: ``library.py``; and the program's own directories
@@ -24,6 +25,7 @@ import selectors
 import signal
 import socket
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -31,8 +33,8 @@ from typing import Any, Callable, Mapping
 
 from .library import LIBRARY_MOUNT, ObservationMount
 from .sandbox import (
-    FILE_SIZE_LIMIT, MAX_LINE_BYTES, READ_OPS, SandboxError, _limits, _send, _stop, bwrap_command, bwrap_path,
-    python_path, read_op,
+    FILE_SIZE_LIMIT, MAX_LINE_BYTES, READ_OPS, SandboxError, _limits, _send, _stop, bwrap_command, proot_command,
+    python_path, read_op, remove_stage, runner,
 )
 
 ROBOT_LIBRARY = Path(__file__).with_name("robot.py")
@@ -92,21 +94,32 @@ def run_command(
     between the program's messages about every half second, names why the command must stop now (free play: the
     operator's Esc, reset or quit); the command then ends ``stopped`` and its process group is killed."""
 
-    python, bwrap = python_path(), bwrap_path()
+    python = python_path()
+    kind, sandbox = runner()
     if observation is not None:
         handle_call = observation.served(handle_call)
     host, child = socket.socketpair()
     started = time.monotonic()
+    stage: Path | None = None
     try:
+        argv = command_bwrap(python, sandbox if kind == "bwrap" else "bwrap", child.fileno(), workspace, command,
+                             extended=extended, observation=observation.root if observation is not None else None,
+                             source=source)
+        env = None  # bubblewrap clears and sets the environment itself
+        if kind == "proot":
+            stage = Path(tempfile.mkdtemp(prefix="ora-code-mode-proot-"))
+            argv, env = proot_command(argv, sandbox, stage)
         process = subprocess.Popen(
-            command_bwrap(python, bwrap, child.fileno(), workspace, command, extended=extended,
-                          observation=observation.root if observation is not None else None, source=source),
-            pass_fds=(child.fileno(),),
+            argv, env=env, pass_fds=(child.fileno(),),
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True,
             preexec_fn=_limits(cpu_s, memory_mib),
         )
-    except OSError as exc:
+    except (OSError, SandboxError) as exc:
         host.close()
+        if stage is not None:
+            remove_stage(stage)
+        if isinstance(exc, SandboxError):
+            raise
         raise SandboxError(f"the sandbox does not start: {exc}") from exc
     finally:
         child.close()
@@ -119,6 +132,8 @@ def run_command(
         _stop(process)
         if process.stdout:
             process.stdout.close()
+        if stage is not None:
+            remove_stage(stage)
     outcome.output = output.decode("utf-8", "replace")
     outcome.wall_s = round(time.monotonic() - started, 3)
     if outcome.exit_code is None and outcome.status in {"completed", "failed"}:
